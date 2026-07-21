@@ -1,0 +1,21 @@
+# ---------------------------------------------------------------------------
+# Anthropic API + raw Zotero RAG  -  pip requirements
+# Setup:
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+#   pip freeze > requirements.lock.txt      # pin exact versions for reproducibility
+# ---------------------------------------------------------------------------
+
+# Core --------------------------------------------------------------------
+anthropic>=0.69          # Claude SDK: messages API, typed content blocks
+numpy>=1.26              # the vector index + cosine similarity
+requests>=2.31           # raw HTTP calls to local Ollama for embeddings
+python-dotenv>=1.0       # load ANTHROPIC_API_KEY from a .env file
+
+# Nice for poking at the API interactively --------------------------------
+ipython>=8.0             # a REPL that doesn't fight you
+
+# Optional ----------------------------------------------------------------
+# Swap local Ollama embeddings for Anthropic's recommended provider.
+# Needs a separate Voyage API key. Uncomment if/when you want it.
+# voyageai>=0.3
