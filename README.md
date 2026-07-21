@@ -1,1 +1,1 @@
-# zotero-rag
+# Zotero RAG
