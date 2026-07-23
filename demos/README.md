@@ -32,7 +32,7 @@ where to go next.
 |---|--------|-------|-------|
 | 1 | `01_load_corpus.py` | the corpus dicts read from Zotero's SQLite | Zotero DB |
 | 2 | `02_embed.py` | text → vector, via local Ollama | Ollama running |
-| 3 | `03_build_index.py` | *(next)* the on-disk vector store | Ollama running |
+| 3 | `03_build_index.py` | the on-disk vector store | an index |
 | 4 | `04_retrieve.py` | *(next)* cosine search for top-k items | an index |
 | 5 | `05_generate.py` | *(next)* grounded answer from Claude | `ANTHROPIC_API_KEY` |
 
