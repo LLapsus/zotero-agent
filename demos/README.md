@@ -33,10 +33,11 @@ where to go next.
 | 1 | `01_load_corpus.py` | the corpus dicts read from Zotero's SQLite | Zotero DB |
 | 2 | `02_embed.py` | text → vector, via local Ollama | Ollama running |
 | 3 | `03_build_index.py` | the on-disk vector store | an index |
-| 4 | `04_retrieve.py` | *(next)* cosine search for top-k items | an index |
-| 5 | `05_generate.py` | *(next)* grounded answer from Claude | `ANTHROPIC_API_KEY` |
+| 4 | `04_retrieve.py` | cosine search for top-k items | index + Ollama |
+| 5 | `05_generate.py` | grounded answer from Claude | `ANTHROPIC_API_KEY` |
 
-Rows marked *(next)* are added as we work through them together.
+Demo 5 is free by default (it only builds the prompt and counts tokens). Pass
+`--run` when you want it to actually call Claude.
 
 `_common.py` is a tiny shared helper that lets the demos `import zotero_rag`
 from one directory up. It contains no pipeline logic.
