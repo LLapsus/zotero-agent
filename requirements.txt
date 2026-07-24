@@ -15,6 +15,16 @@ python-dotenv>=1.0       # load ANTHROPIC_API_KEY from a .env file
 # Nice for poking at the API interactively --------------------------------
 ipython>=8.0             # a REPL that doesn't fight you
 
+# LangChain comparison ------------------------------------------------------
+# Only needed for langchain_version/. The from-scratch pipeline does not use
+# these. Note: FAISS currently lives in langchain-community, which prints a
+# sunset warning on import -- see langchain_version/README.md.
+langchain>=1.3
+langchain-community>=0.4       # FAISS vector store
+langchain-ollama>=1.1          # OllamaEmbeddings
+langchain-anthropic>=1.5       # ChatAnthropic
+faiss-cpu>=1.14
+
 # Optional ----------------------------------------------------------------
 # Swap local Ollama embeddings for Anthropic's recommended provider.
 # Needs a separate Voyage API key. Uncomment if/when you want it.

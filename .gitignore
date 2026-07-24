@@ -1,1 +1,13 @@
 .env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Local vector indexes live in ~/.zotero_rag and ~/.zotero_rag_lc,
+# but ignore them here too in case anyone points INDEX_DIR at the repo.
+*.npy
+*.faiss
+*.pkl
