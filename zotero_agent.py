@@ -1,39 +1,42 @@
 #!/usr/bin/env python3
 """
-zotero_agent.py  -  Where RAG ends and an agent begins.
+zotero_agent.py  -  Agentic RAG with ONE unified retrieval tool.
 
-zotero_rag.py answers every question by semantic retrieval: embed the question,
-find the nearest abstracts, hand them to Claude. That is the right tool for
-"what papers are about X" -- but it is the WRONG tool for "what papers are by
-person Y". Author lookup is an exact database query (WHERE lastName = ...), not
-a fuzzy similarity search, and author names aren't even in the embedded text.
+The two-tool version (zotero_agent_v0.py) gave Claude a semantic search tool and
+a separate author-lookup tool. That taught routing well, but it hit a wall on
+"what did Smith write about VAEs?": two independent tools can't do a real AND.
+The author tool returns no abstracts, and the topic tool searches the whole
+library, not just Smith's papers -- so the intersection only happened, weakly,
+in the model's head.
 
-So instead of picking the retrieval strategy ourselves, we give Claude two
-tools and let it choose per question:
+This version replaces both with a single tool:
 
-    search_by_topic(query)   -> semantic vector search   (the RAG path)
-    find_by_author(surname)  -> exact SQL over Zotero     (the database path)
+    search_library(author=?, topic=?)
 
-This is the shift from "stuff context into the prompt" (RAG) to "retrieval is a
-tool the model calls" (agent). Claude reads the question, decides which tool(s)
-to call, we run them, feed the results back, and it answers -- possibly after
-calling BOTH (e.g. "what did Smith write about VAEs?").
+The model no longer chooses between overlapping tools -- it just fills in
+whichever parameters the question implies:
 
-The loop below is written by hand, not with the SDK's tool runner, so you can
-see every step: the model emits a `tool_use` block, we execute it, we return a
-`tool_result`, and we repeat until it stops calling tools. Each turn prints
-which tool the model picked, so the routing is visible.
+    "papers by Novak"            -> author="Novak"
+    "papers about phase changes" -> topic="phase changes"
+    "Novak's papers on VAEs"     -> author="Novak", topic="VAEs"
 
-Reuses zotero_rag.py for the topic path (its retrieve/load_index) and reads
-Zotero's SQLite directly for the author path -- two genuinely different data
-sources for two genuinely different kinds of question.
+The branching moves INSIDE the tool, where it belongs:
+
+    author only   -> exact SQL lookup over Zotero (lists all their papers)
+    topic only    -> cosine search over the whole index (plain RAG)
+    author+topic  -> filter to the author's papers in SQL, THEN cosine-rank
+                     only that subset -- a genuine "filter + rank" join, the
+                     thing neither vectors nor SQL can do alone.
+
+The agent loop is still hand-written so you can watch each tool_use/tool_result
+step, and it reuses zotero_rag.py for embeddings/index + Zotero's SQLite.
 
 Run it:
-    python zotero_agent.py                          # interactive
-    python zotero_agent.py -q "papers by Medbouhi"  # one question
-    python zotero_agent.py --scripted               # a fixed routing demo
+    python zotero_agent.py                                # interactive
+    python zotero_agent.py -q "Medbouhi's work on VAEs"   # one question
+    python zotero_agent.py --scripted                     # author / topic / both
 
-COSTS MONEY: every question calls Claude (topic embedding is still local/free).
+COSTS MONEY: every question calls Claude (topic embedding stays local/free).
 Needs a built index (python zotero_rag.py --reindex), Ollama running, and
 ANTHROPIC_API_KEY (zotero_rag loads .env for you).
 """
@@ -48,8 +51,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Reuse the from-scratch pipeline: its config, its SQLite path, and -- for the
-# topic tool -- its retrieve()/load_index(). Importing it also runs load_dotenv().
+# Reuse the from-scratch pipeline: config, embeddings, index, and the Zotero DB
+# path. Importing it also runs load_dotenv().
 REPO_ROOT = Path(__file__).resolve().parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -60,104 +63,63 @@ MODEL = zotero_rag.CLAUDE_MODEL     # same model as the rest of the project
 TOP_K = zotero_rag.TOP_K
 MAX_TURNS = 8                       # safety cap on the tool-use loop
 
-# The system prompt tells Claude WHICH tool fits WHICH question. Good tool
-# descriptions (below) do most of the routing; this reinforces it and sets the
-# grounding rule -- answer from tool results only.
 SYSTEM = (
-    "You help the user query their personal Zotero library. You have two tools:\n"
-    "  - search_by_topic: semantic search for papers ABOUT a concept or theme.\n"
-    "  - find_by_author:  exact database lookup of papers BY a named person.\n"
-    "Pick the tool that matches the question. A question can need both -- e.g. "
-    "'what did Smith write about diffusion models?' means find_by_author('Smith') "
-    "and then reason over the topic. Answer using ONLY what the tools return, and "
-    "cite paper titles. If a tool returns nothing, say so plainly instead of "
-    "guessing."
+    "You help the user query their personal Zotero library. You have ONE tool, "
+    "search_library, with two optional inputs:\n"
+    "  - topic:  a concept/theme to rank papers by (semantic search).\n"
+    "  - author: a person's surname to filter by (exact database match).\n"
+    "Use `author` alone to list someone's papers, `topic` alone to find papers "
+    "about a concept, and BOTH together to find a given author's papers about a "
+    "given topic. Fill in whichever inputs the question implies. Answer using "
+    "ONLY what the tool returns, cite paper titles, and if it returns nothing "
+    "say so plainly instead of guessing."
 )
 
-# The descriptions are the load-bearing part of routing: Claude reads them to
-# decide when each tool applies. Be explicit about the boundary between them.
 TOOLS = [
     {
-        "name": "search_by_topic",
+        "name": "search_library",
         "description": (
-            "Semantic (vector) search over the abstracts in the user's Zotero "
-            "library. Returns the papers whose CONTENT is closest in meaning to "
-            "a topic or concept. Use this for questions about WHAT papers are "
-            "about -- themes, methods, ideas, findings. Examples: 'papers about "
-            "phase transitions', 'work on variational autoencoders', 'anything "
-            "on molecular dynamics'. Do NOT use this to find papers by a "
-            "person's name -- author names are not part of the searchable text."
+            "Search the user's Zotero library. Provide `author` to filter to a "
+            "specific person's papers (exact, case-insensitive surname match in "
+            "the database), `topic` to rank papers by semantic similarity to a "
+            "concept, or BOTH to find a given author's papers about a given "
+            "topic. At least one of author/topic must be given. Examples: "
+            "author='Novak'; topic='phase transitions'; author='Novak' + "
+            "topic='variational autoencoders'."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {
+                "topic": {
                     "type": "string",
-                    "description": "The topic or concept to search for.",
+                    "description": "Concept or theme to rank papers by (optional).",
+                },
+                "author": {
+                    "type": "string",
+                    "description": "Author surname to filter by (optional).",
                 },
             },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "find_by_author",
-        "description": (
-            "Exact database lookup of papers written by a specific person, "
-            "matched by surname against Zotero's author records (NOT semantic "
-            "search). Use this whenever the user asks about a named author's "
-            "work. Examples: 'papers by Novak', 'what did Medbouhi publish', "
-            "'articles co-authored by Smith'. Matching is case-insensitive and "
-            "substring-based on the surname."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "surname": {
-                    "type": "string",
-                    "description": "The author surname to look up.",
-                },
-            },
-            "required": ["surname"],
         },
     },
 ]
 
 
 # ----------------------------------------------------------------------------
-# TOOL 1: search_by_topic  -  the RAG path (vectors)
+# DATABASE side: look up an author's papers directly in Zotero's SQLite.
 #
-# This is literally zotero_rag.retrieve(). We format the hits with abstracts so
-# Claude has enough to actually answer a content question, same as the RAG
-# pipeline's answer() does.
+# Returns one dict per matched paper: key (Zotero item key, used to line up with
+# the vector index), title, year, and the FULL author list (not just first
+# author -- that's the detail the corpus threw away). Same read-only temp-copy
+# pattern as load_corpus.
 # ----------------------------------------------------------------------------
 
-def tool_search_by_topic(query: str, matrix, corpus) -> str:
-    hits = zotero_rag.retrieve(query, matrix, corpus, k=TOP_K)
-    if not hits:
-        return "No matching papers."
-    blocks = []
-    for n, h in enumerate(hits, 1):
-        tag = " ".join(x for x in [h.get("authors"), h.get("year")] if x)
-        blocks.append(f"[{n}] ({h['score']:.3f}) {h['title']} ({tag})\n{h['abstract']}")
-    return "\n\n".join(blocks)
-
-
-# ----------------------------------------------------------------------------
-# TOOL 2: find_by_author  -  the DATABASE path (SQL)
-#
-# No vectors at all. We read Zotero's SQLite directly (same read-only temp-copy
-# pattern as load_corpus) so we get ALL authors, always current, and matched
-# exactly. This is the concrete demonstration that author lookup is a database
-# query, not retrieval.
-# ----------------------------------------------------------------------------
-
-def find_papers_by_author(surname: str, db_path: Path | None = None) -> str:
+def author_papers(surname: str, db_path: Path | None = None) -> list[dict]:
     surname = surname.strip()
     if not surname:
-        return "No surname given."
+        return []
     db_path = db_path or zotero_rag.ZOTERO_DB
     if not db_path.exists():
-        return f"Zotero DB not found at {db_path}."
+        return []
 
     with tempfile.TemporaryDirectory() as tmp:
         db_copy = Path(tmp) / "zotero.sqlite"
@@ -165,44 +127,47 @@ def find_papers_by_author(surname: str, db_path: Path | None = None) -> str:
         con = sqlite3.connect(f"file:{db_copy}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
 
-        # 1. item IDs that have an author matching the surname (case-insensitive,
-        #    substring). This is the WHERE clause vectors can never express.
+        # 1. items with an author matching the surname (the WHERE clause vectors
+        #    can never express).
         id_rows = con.execute(
             """
-            SELECT DISTINCT ic.itemID AS item_id
-            FROM itemCreators ic
-            JOIN creators c ON c.creatorID = ic.creatorID
+            SELECT DISTINCT i.itemID AS item_id, i.key AS key
+            FROM items i
+            JOIN itemCreators ic ON ic.itemID = i.itemID
+            JOIN creators     c  ON c.creatorID = ic.creatorID
             WHERE LOWER(c.lastName) LIKE LOWER(:pat)
-              AND ic.itemID NOT IN (SELECT itemID FROM deletedItems)
+              AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
             """,
             {"pat": f"%{surname}%"},
         ).fetchall()
-        ids = [r["item_id"] for r in id_rows]
-        if not ids:
+        if not id_rows:
             con.close()
-            return f"No papers found with an author surname matching '{surname}'."
-
+            return []
+        keys = {r["item_id"]: r["key"] for r in id_rows}
+        ids = list(keys)
         qmarks = ",".join("?" * len(ids))
 
-        # 2. title + date for those items (the same field pivot as load_corpus).
-        meta_rows = con.execute(
-            f"""
-            SELECT i.itemID AS item_id,
-                   MAX(CASE WHEN f.fieldName = 'title' THEN v.value END) AS title,
-                   MAX(CASE WHEN f.fieldName = 'date'  THEN v.value END) AS date
-            FROM items i
-            JOIN itemData       d ON d.itemID  = i.itemID
-            JOIN itemDataValues v ON v.valueID = d.valueID
-            JOIN fields         f ON f.fieldID = d.fieldID
-            WHERE i.itemID IN ({qmarks})
-            GROUP BY i.itemID
-            HAVING title IS NOT NULL
-            """,
-            ids,
-        ).fetchall()
+        # 2. title + date for those items (the field pivot from load_corpus).
+        meta = {
+            r["item_id"]: (r["title"], r["date"])
+            for r in con.execute(
+                f"""
+                SELECT i.itemID AS item_id,
+                       MAX(CASE WHEN f.fieldName='title' THEN v.value END) AS title,
+                       MAX(CASE WHEN f.fieldName='date'  THEN v.value END) AS date
+                FROM items i
+                JOIN itemData       d ON d.itemID  = i.itemID
+                JOIN itemDataValues v ON v.valueID = d.valueID
+                JOIN fields         f ON f.fieldID = d.fieldID
+                WHERE i.itemID IN ({qmarks})
+                GROUP BY i.itemID
+                HAVING title IS NOT NULL
+                """,
+                ids,
+            )
+        }
 
-        # 3. the FULL author list per item (not just first-author -- that is the
-        #    detail the corpus threw away).
+        # 3. full author list per item.
         authors: dict[int, list[str]] = {}
         for a in con.execute(
             f"""
@@ -218,23 +183,96 @@ def find_papers_by_author(surname: str, db_path: Path | None = None) -> str:
                 authors.setdefault(a["item_id"], []).append(a["last"])
         con.close()
 
-    if not meta_rows:
-        return f"No papers found with an author surname matching '{surname}'."
+    papers = []
+    for item_id, (title, date) in meta.items():
+        papers.append({
+            "key": keys[item_id],
+            "title": title,
+            "year": (date or "")[:4],
+            "authors": ", ".join(authors.get(item_id, [])) or "unknown",
+        })
+    papers.sort(key=lambda p: p["year"], reverse=True)
+    return papers
 
-    lines = [f"Found {len(meta_rows)} paper(s) with an author matching '{surname}':"]
-    for n, r in enumerate(meta_rows, 1):
-        who = ", ".join(authors.get(r["item_id"], [])) or "unknown"
-        year = (r["date"] or "")[:4]
-        lines.append(f"[{n}] {r['title']} ({year}) -- {who}")
+
+# ----------------------------------------------------------------------------
+# VECTOR side: cosine-rank a set of candidate corpus rows against a topic.
+#
+# `cand` is a list of indices into corpus/matrix. For a topic-only search that's
+# every row (plain RAG); for author+topic it's just the author's rows -- so the
+# ranking runs over the filtered subset, which is the whole point.
+# ----------------------------------------------------------------------------
+
+def rank_by_topic(topic: str, matrix, cand: list[int], k: int = TOP_K) -> list[tuple[int, float]]:
+    q = zotero_rag.embed(topic)          # local Ollama call
+    sims = matrix @ q                    # cosine similarity (unit vectors)
+    top = sorted(cand, key=lambda i: -float(sims[i]))[:k]
+    return [(i, float(sims[i])) for i in top]
+
+
+# ---- formatting -----------------------------------------------------------
+
+def _format_ranked(header: str, ranked: list[tuple[int, float]], corpus: list[dict]) -> str:
+    blocks = [header]
+    for n, (i, score) in enumerate(ranked, 1):
+        h = corpus[i]
+        tag = " ".join(x for x in [h.get("authors"), h.get("year")] if x)
+        blocks.append(f"[{n}] ({score:.3f}) {h['title']} ({tag})\n{h['abstract']}")
+    return "\n\n".join(blocks)
+
+
+def _format_listing(header: str, papers: list[dict]) -> str:
+    lines = [header]
+    for n, p in enumerate(papers, 1):
+        lines.append(f"[{n}] {p['title']} ({p['year']}) -- {p['authors']}")
     return "\n".join(lines)
 
 
 # ----------------------------------------------------------------------------
-# THE AGENT LOOP  -  hand-written tool-use loop, so every step is visible.
-#
-# call the model -> if it wants a tool, run it and return a tool_result ->
-# repeat until it stops calling tools. We print each tool the model picks so
-# you can watch the routing happen.
+# THE UNIFIED TOOL: branch on which inputs were filled.
+# ----------------------------------------------------------------------------
+
+def tool_search_library(topic: str, author: str, matrix, corpus) -> str:
+    topic = (topic or "").strip()
+    author = (author or "").strip()
+    if not topic and not author:
+        return "Provide at least a topic or an author."
+
+    if author:
+        papers = author_papers(author)
+        if not papers:
+            return f"No papers found with an author matching '{author}'."
+
+        if not topic:
+            # author only -> exact DB listing of everything they wrote.
+            return _format_listing(
+                f"Found {len(papers)} paper(s) by an author matching '{author}':",
+                papers,
+            )
+
+        # author + topic -> rank ONLY this author's indexed papers by the topic.
+        # Only papers with an abstract are in the index (they have vectors), so
+        # we match by Zotero key against the corpus.
+        keys = {p["key"] for p in papers}
+        cand = [i for i, c in enumerate(corpus) if c["key"] in keys]
+        if not cand:
+            return (
+                f"Found {len(papers)} paper(s) by '{author}', but none are in the "
+                f"abstract index, so I can't rank them by topic. Their titles:\n"
+                + _format_listing("", papers)
+            )
+        ranked = rank_by_topic(topic, matrix, cand)
+        return _format_ranked(
+            f"Papers by '{author}' ranked by relevance to '{topic}':", ranked, corpus
+        )
+
+    # topic only -> plain RAG over the whole library.
+    ranked = rank_by_topic(topic, matrix, list(range(len(corpus))))
+    return _format_ranked(f"Papers most related to '{topic}':", ranked, corpus)
+
+
+# ----------------------------------------------------------------------------
+# THE AGENT LOOP  -  hand-written, so each tool_use/tool_result step is visible.
 # ----------------------------------------------------------------------------
 
 def run_agent(question: str, client, matrix, corpus) -> None:
@@ -249,7 +287,6 @@ def run_agent(question: str, client, matrix, corpus) -> None:
             messages=messages,
         )
 
-        # Show what the model decided this turn.
         for block in resp.content:
             if block.type == "tool_use":
                 arg = json.dumps(block.input, ensure_ascii=False)
@@ -258,20 +295,18 @@ def run_agent(question: str, client, matrix, corpus) -> None:
         if resp.stop_reason != "tool_use":
             break
 
-        # Preserve the assistant turn verbatim (incl. any thinking/tool_use
-        # blocks) -- the API needs it to match up the tool results.
         messages.append({"role": "assistant", "content": resp.content})
 
-        # Execute every tool the model asked for, collect all results into ONE
-        # user message (the API expects them batched together).
         results = []
         for block in resp.content:
             if block.type != "tool_use":
                 continue
-            if block.name == "search_by_topic":
-                out = tool_search_by_topic(block.input.get("query", ""), matrix, corpus)
-            elif block.name == "find_by_author":
-                out = find_papers_by_author(block.input.get("surname", ""))
+            if block.name == "search_library":
+                out = tool_search_library(
+                    block.input.get("topic", ""),
+                    block.input.get("author", ""),
+                    matrix, corpus,
+                )
             else:
                 out = f"Unknown tool: {block.name}"
             first = out.splitlines()[0] if out else ""
@@ -294,19 +329,20 @@ def run_agent(question: str, client, matrix, corpus) -> None:
 # ----------------------------------------------------------------------------
 
 SCRIPT = [
-    "Which papers in my library were written by Medbouhi?",             # -> author (SQL)
-    "What research do I have on phase transitions in machine learning?", # -> topic (vectors)
+    "Which papers in my library are by Medbouhi?",                     # author only  -> SQL
+    "What research do I have on phase transitions in machine learning?",  # topic only   -> vectors
+    "Of Medbouhi's papers, which is about variational autoencoders?",  # both -> filter + rank
 ]
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Agentic RAG over a Zotero library.")
+    ap = argparse.ArgumentParser(description="Agentic RAG (unified tool) over a Zotero library.")
     ap.add_argument("-q", "--query", help="ask one question and exit")
     ap.add_argument("--scripted", action="store_true",
-                    help="run a fixed routing demo (author question + topic question)")
+                    help="run a fixed demo: author-only, topic-only, and both")
     args = ap.parse_args()
 
-    print("zotero_agent -- Claude picks the retrieval tool per question (COSTS MONEY)")
+    print("zotero_agent -- one unified search_library(author?, topic?) tool (COSTS MONEY)")
 
     try:
         import anthropic
@@ -316,7 +352,7 @@ def main() -> None:
         print("(Is ANTHROPIC_API_KEY set? zotero_rag loads .env automatically.)")
         return
 
-    matrix, corpus = zotero_rag.load_index()  # for the topic tool
+    matrix, corpus = zotero_rag.load_index()
 
     if args.scripted:
         for q in SCRIPT:
@@ -324,9 +360,10 @@ def main() -> None:
             print(f"Q: {q}")
             print("=" * 78)
             run_agent(q, client, matrix, corpus)
-        print("Notice the routing: the author question went to find_by_author (SQL),")
-        print("the topic question to search_by_topic (vectors). Same interface, two")
-        print("completely different data paths -- and the model chose.")
+        print("Notice the third question: the model fills BOTH author and topic,")
+        print("and the tool filters to Medbouhi's papers first, then ranks them by")
+        print("topic -- a real filter+rank join, not an intersection guessed in the")
+        print("model's head (which is where the two-tool v0 fell down).")
         return
 
     if args.query:
