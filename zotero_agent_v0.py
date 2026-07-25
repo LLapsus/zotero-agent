@@ -40,7 +40,7 @@ sources for two genuinely different kinds of question.
 
 Run it:
     python zotero_agent.py                          # interactive
-    python zotero_agent.py -q "papers by Medbouhi"  # one question
+    python zotero_agent_v0.py -q "papers by Novak"  # one question
     python zotero_agent.py --scripted               # a fixed routing demo
 
 COSTS MONEY: every question calls Claude (topic embedding is still local/free).
@@ -116,7 +116,7 @@ TOOLS = [
             "Exact database lookup of papers written by a specific person, "
             "matched by surname against Zotero's author records (NOT semantic "
             "search). Use this whenever the user asks about a named author's "
-            "work. Examples: 'papers by Novak', 'what did Medbouhi publish', "
+            "work. Examples: 'papers by Novak', 'what did Smith publish', "
             "'articles co-authored by Smith'. Matching is case-insensitive and "
             "substring-based on the surname."
         ),

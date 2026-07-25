@@ -33,7 +33,7 @@ step, and it reuses zotero_rag.py for embeddings/index + Zotero's SQLite.
 
 Run it:
     python zotero_agent.py                                # interactive
-    python zotero_agent.py -q "Medbouhi's work on VAEs"   # one question
+    python zotero_agent.py -q "Novak's work on VAEs"      # one question
     python zotero_agent.py --scripted                     # author / topic / both
 
 COSTS MONEY: every question calls Claude (topic embedding stays local/free).
@@ -279,7 +279,11 @@ def tool_search_library(topic: str, author: str, matrix, corpus) -> str:
 def run_agent(question: str, client, matrix, corpus) -> None:
     messages = [{"role": "user", "content": question}]
 
+    # Run the agent loop, which may call the tool multiple times if the model
+    # needs to refine its answer. 
+    # Stop if the model returns text instead of a tool call, or if we hit the safety cap.   
     for _ in range(MAX_TURNS):
+        # request a response from the model, which may include a tool call 
         resp = client.messages.create(
             model=MODEL,
             max_tokens=2048,
@@ -288,6 +292,7 @@ def run_agent(question: str, client, matrix, corpus) -> None:
             messages=messages,
         )
 
+        # print the model's text output (if any) and any tool calls it made
         for block in resp.content:
             if block.type == "tool_use":
                 arg = json.dumps(block.input, ensure_ascii=False)
@@ -375,9 +380,9 @@ def main() -> None:
             print("=" * 78)
             run_agent(q, client, matrix, corpus)
         print("Notice the third question: the model fills BOTH author and topic,")
-        print("and the tool filters to Medbouhi's papers first, then ranks them by")
-        print("topic -- a real filter+rank join, not an intersection guessed in the")
-        print("model's head (which is where the two-tool v0 fell down).")
+        print("and the tool filters to that author's papers first, then ranks them")
+        print("by topic -- a real filter+rank join, not an intersection guessed in")
+        print("the model's head (which is where the two-tool v0 fell down).")
         return
 
     if args.query:
