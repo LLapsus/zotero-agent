@@ -35,9 +35,21 @@ where to go next.
 | 3 | `03_build_index.py` | the on-disk vector store | an index |
 | 4 | `04_retrieve.py` | cosine search for top-k items | index + Ollama |
 | 5 | `05_generate.py` | grounded answer from Claude | `ANTHROPIC_API_KEY` |
+| 6 | `06_conversational.py` | adding memory: follow-up questions that work | `ANTHROPIC_API_KEY` |
 
 Demo 5 is free by default (it only builds the prompt and counts tokens). Pass
 `--run` when you want it to actually call Claude.
+
+Demo 6 is a step *beyond* the base pipeline: `zotero_rag.py` answers each
+question from a blank slate, so a follow-up like "explain that more simply"
+fails — the retriever re-searches on those few words and Claude never saw the
+previous answer. Demo 6 fixes both, from scratch, by keeping a message history
+(so Claude remembers) and rewriting each follow-up into a standalone search
+query (so retrieval follows the thread). It always calls the API — a
+conversation is inherently interactive — so run `--scripted` for a fixed 3-turn
+showcase. This is exactly the "conversational memory" a framework like LangChain
+gives you prebuilt (`RunnableWithMessageHistory`,
+`create_history_aware_retriever`); here you can see the machinery.
 
 `_common.py` is a tiny shared helper that lets the demos `import zotero_rag`
 from one directory up. It contains no pipeline logic.
@@ -48,6 +60,9 @@ from one directory up. It contains no pipeline logic.
   do arithmetic. Nothing leaves your machine.
 - `05` calls the Anthropic API, which **costs a small amount of money** per
   question (it's one short Claude request).
+- `06` always calls the API and costs a little more: one answer call per turn,
+  plus a cheap rewrite call from the second turn on. The `--scripted` run is a
+  few cents total.
 
 ## Where this is heading
 

@@ -29,6 +29,10 @@ import argparse
 import sys
 from pathlib import Path
 
+# Suppress deprecation warnings from LangChain, which are noisy and not relevant to this script.
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 # Make the from-scratch module importable: we reuse its config and its SQLite
 # reader (see stage 1 below for why).
 REPO_ROOT = Path(__file__).resolve().parent.parent
