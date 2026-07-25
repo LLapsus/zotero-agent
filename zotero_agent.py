@@ -283,7 +283,7 @@ def run_agent(question: str, client, matrix, corpus) -> None:
     # needs to refine its answer. 
     # Stop if the model returns text instead of a tool call, or if we hit the safety cap.   
     for _ in range(MAX_TURNS):
-        # request a response from the model, which may include a tool call 
+        # Request a response from the model.
         resp = client.messages.create(
             model=MODEL,
             max_tokens=2048,
@@ -292,29 +292,37 @@ def run_agent(question: str, client, matrix, corpus) -> None:
             messages=messages,
         )
 
-        # print the model's text output (if any) and any tool calls it made
+        # Print any tool calls the model made, so the user can see what it's doing.
         for block in resp.content:
             if block.type == "tool_use":
                 arg = json.dumps(block.input, ensure_ascii=False)
                 print(f"  {ui.tool('tool call')} {ui.cyan(block.name)}({arg})")
 
+        # If the model didn't call a tool, we're done.
         if resp.stop_reason != "tool_use":
             break
 
+        # Append the model's output to the conversation history.
         messages.append({"role": "assistant", "content": resp.content})
 
+        # Process any tool calls the model made.
         results = []
         for block in resp.content:
             if block.type != "tool_use":
                 continue
             if block.name == "search_library":
+                # Branch inside the tool based on which inputs were filled.
                 out = tool_search_library(
                     block.input.get("topic", ""),
                     block.input.get("author", ""),
                     matrix, corpus,
                 )
             else:
+                # Unknown tool name -- this shouldn't happen, but handle it gracefully.
                 out = f"Unknown tool: {block.name}"
+                
+            # Print the first line of the tool's output, 
+            # so the user can see what it returned.
             first = out.splitlines()[0] if out else ""
             print(f"  {ui.tool('tool result')} {ui.dim(first[:78])}")
             results.append({
@@ -322,8 +330,12 @@ def run_agent(question: str, client, matrix, corpus) -> None:
                 "tool_use_id": block.id,
                 "content": out,
             })
+            
+        # Append the tool results to the conversation history, 
+        # so the model can see what it returned.
         messages.append({"role": "user", "content": results})
 
+    # Print the final answer from the model.
     text = "".join(b.text for b in resp.content if b.type == "text")
     print("\n" + ui.bold("Answer:") + "\n")
     print(text or "(no text answer)")
