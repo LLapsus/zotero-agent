@@ -47,25 +47,105 @@ Read them in order — each builds on the one before:
 | `zotero_agent.py` | The **agent**: one unified `search_library(author?, topic?)` tool — semantic, exact, or a real filter+rank join. |
 | `langchain_version/` | The same RAG pipeline written with **LangChain**, plus a measured comparison. |
 
-## Quick start
+## Installation & setup
+
+This runs against **your own Zotero library** — there is no bundled dataset. You
+point it at your `zotero.sqlite`, build a local index once, then ask questions
+about your own papers.
+
+### Prerequisites
+
+- **Python 3.12**
+- **[Ollama](https://ollama.com)** — a local server that produces the embeddings
+  (free, runs on your machine)
+- **An [Anthropic API key](https://console.anthropic.com)** — only the final
+  answer calls the paid API
+- **A Zotero library** — the desktop app keeps its data in a `zotero.sqlite`
+  file (default `~/Zotero/zotero.sqlite`)
+
+### 1. Get the code
+
+```bash
+git clone <your-fork-url> zotero_agent && cd zotero_agent
+```
+
+### 2. Create the environment
+
+Conda:
 
 ```bash
 conda env create -f environment.yml && conda activate anthropic-rag
-# or: pip install -r requirements.txt
-
-ollama pull nomic-embed-text          # local embeddings, free
-cp .env.example .env                  # then put your ANTHROPIC_API_KEY in it
-
-python zotero_rag.py --reindex        # build the index (~2 min for ~1300 items)
-
-python zotero_rag.py -q "your question"                 # plain RAG
-python zotero_agent.py -q "Novak's papers about VAEs"   # the agent
 ```
 
-Requires a Zotero library at `~/Zotero/zotero.sqlite` (change `ZOTERO_DB` in the
-config block if yours lives elsewhere), Ollama running locally, and an Anthropic
-API key. Indexing and retrieval are local and free; only the final answer (and
-the agent's tool loop) calls the paid API.
+or plain venv + pip:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+`environment.yml` installs the **core** pipeline. The LangChain comparison in
+`langchain_version/` needs extra packages — they're in `requirements.txt`, or
+`pip install langchain langchain-community langchain-ollama langchain-anthropic faiss-cpu`
+into the conda env.
+
+### 3. Start Ollama and pull the embedding model
+
+```bash
+ollama pull nomic-embed-text     # 768-dim local embeddings
+```
+
+Ollama serves on `http://localhost:11434` (the default in `zotero_rag.py`'s
+`OLLAMA_URL`). Make sure `ollama serve` is running — the desktop app starts it
+for you; on a headless box run it yourself.
+
+### 4. Point it at your Zotero library
+
+The default is `~/Zotero/zotero.sqlite`. If yours lives elsewhere, edit the
+`ZOTERO_DB` line in the **config block at the top of `zotero_rag.py`**.
+
+You can leave **Zotero open** while running this — `load_corpus()` copies the
+database to a temp file and reads it **read-only**, so it never locks or touches
+your live library.
+
+### 5. Add your Anthropic API key
+
+```bash
+cp .env.example .env         # then edit .env and set ANTHROPIC_API_KEY=sk-ant-...
+```
+
+The code loads `.env` automatically (via `python-dotenv`); `.env` is gitignored.
+
+### 6. Build the index
+
+```bash
+python zotero_rag.py --reindex
+```
+
+This embeds every title + abstract via Ollama (~2 min for ~1300 items) and
+caches the result to `~/.zotero_rag/`. Re-run it whenever you add papers — the
+index is a cache with no automatic invalidation.
+
+## Usage
+
+```bash
+python zotero_rag.py                          # interactive RAG chat (/reset to clear)
+python zotero_rag.py -q "your question"       # one-shot RAG
+
+python zotero_agent.py                        # the agent, interactive
+python zotero_agent.py -q "Novak's papers about VAEs"
+python zotero_agent.py --scripted             # a portable demo (author/topic/both)
+```
+
+Indexing and retrieval are **local and free**; only the final answer (and the
+agent's tool loop) calls the paid API (~$0.01 per question).
+
+**Trouble?**
+- *`No index found`* → run `python zotero_rag.py --reindex` first.
+- *`Zotero DB not found`* → fix `ZOTERO_DB` in `zotero_rag.py`.
+- *Ollama connection errors* → is `ollama serve` running, and did you
+  `ollama pull nomic-embed-text`?
+- *Auth errors* → is `ANTHROPIC_API_KEY` set in `.env`?
 
 ## Learning path
 

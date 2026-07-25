@@ -303,10 +303,22 @@ def run_agent(question: str, client, matrix, corpus) -> None:
 # CLI
 # ----------------------------------------------------------------------------
 
-SCRIPT = [
-    "Which papers in my library were written by Medbouhi?",             # -> author (SQL)
-    "What research do I have on phase transitions in machine learning?", # -> topic (vectors)
-]
+def _sample_author(corpus: list[dict]) -> str:
+    """Pick a real author from the loaded library, so --scripted works on ANY
+    library -- not just the one it was written against."""
+    for c in corpus:
+        name = (c.get("authors") or "").replace(" et al.", "").strip()
+        if name:
+            return name
+    return "Smith"
+
+
+def _scripted_questions(corpus: list[dict]) -> list[str]:
+    who = _sample_author(corpus)
+    return [
+        f"Which papers in my library were written by {who}?",  # -> author (SQL)
+        "What research do I have on machine learning?",        # -> topic (vectors)
+    ]
 
 
 def main() -> None:
@@ -329,7 +341,8 @@ def main() -> None:
     matrix, corpus = zotero_rag.load_index()  # for the topic tool
 
     if args.scripted:
-        for q in SCRIPT:
+        print("(example questions are built from your own library)")
+        for q in _scripted_questions(corpus):
             print("\n" + "=" * 78)
             print(f"Q: {q}")
             print("=" * 78)
