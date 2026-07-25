@@ -19,8 +19,9 @@ Needs: - Ollama running with an embedding model:  ollama pull nomic-embed-text
        - export ANTHROPIC_API_KEY=sk-ant-...
 
 Usage: python zotero_rag.py --reindex           # build the index (first run)
-       python zotero_rag.py                     # interactive Q&A loop
-       python zotero_rag.py -q "your question"  # single question
+       python zotero_rag.py                     # interactive chat (remembers the
+                                                #   conversation; /reset starts over)
+       python zotero_rag.py -q "your question"  # single question (one-shot, no memory)
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ ZOTERO_DB = Path.home() / "Zotero" / "zotero.sqlite"    # default Linux location
 OLLAMA_URL = "http://localhost:11434/api/embed"         # embed via Ollama running locally
 EMBED_MODEL = "nomic-embed-text"                        # ollama pull nomic-embed-text
 CLAUDE_MODEL = "claude-sonnet-5"                        # or "claude-haiku-4-5-20251001" (cheaper)
+REWRITE_MODEL = "claude-haiku-4-5-20251001"             # cheap model: rewrites follow-ups for retrieval
 INDEX_DIR = Path.home() / ".zotero_rag"                 # where we cache the vectors
 TOP_K = 6                                               # how many abstracts to feed Claude
 
@@ -233,6 +235,38 @@ def retrieve(question: str, matrix: np.ndarray, corpus: list[dict], k: int = TOP
 
 
 # ----------------------------------------------------------------------------
+# 4b. REWRITE QUERY  -  make a follow-up self-contained before retrieving.
+#
+# The interactive chat keeps a conversation, but retrieve() only ever sees the
+# words of the latest question. "explain that more simply" has no searchable
+# content, so we first ask a cheap model to fold the conversation into ONE
+# standalone query, then retrieve on that. This is the retriever's half of
+# "memory". One-shot -q has no history, so it never calls this.
+# ----------------------------------------------------------------------------
+
+def rewrite_query(question: str, history: list[dict] | None) -> str:
+    if not history:                       # nothing to fold in -> already standalone
+        return question
+    import anthropic
+
+    transcript = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in history)
+    prompt = (
+        "Given this conversation, rewrite the user's follow-up into a single "
+        "standalone search query that stands on its own, with no pronouns like "
+        "'that' or 'this' referring back. Output ONLY the query, nothing else.\n\n"
+        f"Conversation so far:\n{transcript}\n\n"
+        f"Follow-up: {question}"
+    )
+    client = anthropic.Anthropic()
+    resp = client.messages.create(
+        model=REWRITE_MODEL,
+        max_tokens=128,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return "".join(b.text for b in resp.content if b.type == "text").strip()
+
+
+# ----------------------------------------------------------------------------
 # 5. GENERATE  -  hand the retrieved abstracts to Claude and ask the question.
 #
 # The prompt does two honest things: (a) label each source [1], [2]... so the
@@ -241,7 +275,7 @@ def retrieve(question: str, matrix: np.ndarray, corpus: list[dict], k: int = TOP
 # what separates RAG from "just ask the model".
 # ----------------------------------------------------------------------------
 
-def answer(question: str, hits: list[dict]) -> str:
+def answer(question: str, hits: list[dict], history: list[dict] | None = None) -> str:
     import anthropic
 
     context_blocks = []
@@ -258,12 +292,18 @@ def answer(question: str, hits: list[dict]) -> str:
     )
     user = f"Abstracts:\n\n{context}\n\n---\n\nQuestion: {question}"
 
+    # In interactive chat `history` carries the earlier turns as CLEAN Q&A text
+    # (not their abstracts -- so the prompt doesn't balloon by 6 abstracts each
+    # turn). One-shot -q passes nothing, and this stays a single-message request,
+    # exactly as before.
+    messages = (history or []) + [{"role": "user", "content": user}]
+
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
     resp = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=1024,
         system=system,
-        messages=[{"role": "user", "content": user}],
+        messages=messages,
     )
     # content is a list of typed blocks (v1 API); join the text ones.
     return "".join(b.text for b in resp.content if b.type == "text")
@@ -273,14 +313,30 @@ def answer(question: str, hits: list[dict]) -> str:
 # 6. CLI
 # ----------------------------------------------------------------------------
 
-def run_query(question: str, matrix: np.ndarray, corpus: list[dict]) -> None:
-    hits = retrieve(question, matrix, corpus)
+def run_query(question: str, matrix: np.ndarray, corpus: list[dict],
+              history: list[dict] | None = None) -> None:
+    # history is None -> one-shot (stateless), same as before. A list -> chat:
+    # rewrite the question for retrieval, answer with the conversation, then
+    # remember this turn (mutating the caller's `history`).
+    conversational = history is not None
+
+    search_q = rewrite_query(question, history) if conversational else question
+    if search_q != question:
+        print(f"  [rewritten for search] {search_q!r}")
+
+    hits = retrieve(search_q, matrix, corpus)
     print("\nRetrieved:")
     for n, h in enumerate(hits, 1):
         print(f"  [{n}] ({h['score']:.3f}) {h['title'][:80]}")
     print("\nAnswer:\n")
-    print(answer(question, hits))
+    text = answer(question, hits, history if conversational else None)
+    print(text)
     print()
+
+    if conversational:
+        # Store the CLEAN turn (no abstracts) -- keeps the running prompt small.
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": text})
 
 
 def main() -> None:
@@ -296,10 +352,12 @@ def main() -> None:
         matrix, corpus = load_index()
 
     if args.query:
-        run_query(args.query, matrix, corpus)
+        run_query(args.query, matrix, corpus)   # one-shot: no memory
         return
 
-    print("Ask about your library (empty line or Ctrl-D to quit).")
+    print("Ask about your library. It remembers the conversation, so follow-ups")
+    print("work. Commands:  /reset  new conversation   |   empty line or Ctrl-D  quit")
+    history: list[dict] = []
     while True:
         try:
             q = input("\n> ").strip()
@@ -307,7 +365,11 @@ def main() -> None:
             break
         if not q:
             break
-        run_query(q, matrix, corpus)
+        if q in ("/reset", "/new"):
+            history.clear()
+            print("  [conversation reset -- starting fresh]")
+            continue
+        run_query(q, matrix, corpus, history)
 
 
 if __name__ == "__main__":
