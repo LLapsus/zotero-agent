@@ -40,6 +40,8 @@ import argparse
 
 from _common import zotero_rag, rule
 
+import ui  # cosmetic ANSI styling for the interactive prompt
+
 # Same grounding instruction zotero_rag.answer() uses -- kept identical so the
 # only thing this demo changes is the *memory*, not the answering behaviour.
 SYSTEM = (
@@ -194,14 +196,16 @@ def main() -> None:
         print("  retrieve() and the prompt are unchanged.")
         return
 
-    print("\nAsk about your library (empty line or Ctrl-D to quit).")
+    print("\nAsk about your library. Commands:  /exit (or Ctrl-D)  quit")
     while True:
         try:
-            q = input("\n> ").strip()
+            q = ui.ask("\n> ").strip()
         except EOFError:
             break
-        if not q:
+        if q in ("/exit", "/quit", "exit", "quit"):
             break
+        if not q:
+            continue
         one_turn(client, q, matrix, corpus, history)
 
 

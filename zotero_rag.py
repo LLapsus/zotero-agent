@@ -42,6 +42,9 @@ from pathlib import Path
 import numpy as np
 import requests
 
+# cosmetic ANSI styling for the interactive CLI only (no-op when output is piped)
+import ui
+
 # ----------------------------------------------------------------------------
 # 0. CONFIG  -  change these to match your machine
 # ----------------------------------------------------------------------------
@@ -322,13 +325,14 @@ def run_query(question: str, matrix: np.ndarray, corpus: list[dict],
 
     search_q = rewrite_query(question, history) if conversational else question
     if search_q != question:
-        print(f"  [rewritten for search] {search_q!r}")
+        print(ui.dim(f"  [rewritten for search] {search_q!r}"))
 
     hits = retrieve(search_q, matrix, corpus)
-    print("\nRetrieved:")
+    print(ui.dim("\nRetrieved:"))
     for n, h in enumerate(hits, 1):
-        print(f"  [{n}] ({h['score']:.3f}) {h['title'][:80]}")
-    print("\nAnswer:\n")
+        score = ui.dim(f"({h['score']:.3f})")
+        print(f"  {ui.idx(n)} {score} {h['title'][:80]}")
+    print("\n" + ui.bold("Answer:") + "\n")
     text = answer(question, hits, history if conversational else None)
     print(text)
     print()
@@ -356,18 +360,20 @@ def main() -> None:
         return
 
     print("Ask about your library. It remembers the conversation, so follow-ups")
-    print("work. Commands:  /reset  new conversation   |   empty line or Ctrl-D  quit")
+    print("work. Commands:  /reset  new conversation   |   /exit (or Ctrl-D)  quit")
     history: list[dict] = []
     while True:
         try:
-            q = input("\n> ").strip()
+            q = ui.ask("\n> ").strip()
         except EOFError:
             break
-        if not q:
+        if q in ("/exit", "/quit", "exit", "quit"):
             break
+        if not q:
+            continue
         if q in ("/reset", "/new"):
             history.clear()
-            print("  [conversation reset -- starting fresh]")
+            print(ui.dim("  [conversation reset -- starting fresh]"))
             continue
         run_query(q, matrix, corpus, history)
 

@@ -40,6 +40,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import zotero_rag  # noqa: E402  -- also runs load_dotenv() for ANTHROPIC_API_KEY
+import ui          # noqa: E402  cosmetic ANSI styling for the interactive prompt
 
 from langchain_anthropic import ChatAnthropic  # noqa: E402
 from langchain_community.vectorstores import FAISS  # noqa: E402
@@ -211,14 +212,16 @@ def main() -> None:
         return
 
     # enter interactive mode
-    print("Ask about your library (empty line or Ctrl-D to quit).")
+    print("Ask about your library. Commands:  /exit (or Ctrl-D)  quit")
     while True:
         try:
-            q = input("\n> ").strip()
+            q = ui.ask("\n> ").strip()
         except EOFError:
             break
-        if not q:
+        if q in ("/exit", "/quit", "exit", "quit"):
             break
+        if not q:
+            continue
         run_query(q, store, chain)
 
 

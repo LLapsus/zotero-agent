@@ -58,6 +58,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import zotero_rag  # noqa: E402
+import ui          # noqa: E402  cosmetic ANSI styling for the interactive CLI
 
 MODEL = zotero_rag.CLAUDE_MODEL     # same model as the rest of the project
 TOP_K = zotero_rag.TOP_K
@@ -290,7 +291,7 @@ def run_agent(question: str, client, matrix, corpus) -> None:
         for block in resp.content:
             if block.type == "tool_use":
                 arg = json.dumps(block.input, ensure_ascii=False)
-                print(f"  [tool call] {block.name}({arg})")
+                print(f"  {ui.tool('tool call')} {ui.cyan(block.name)}({arg})")
 
         if resp.stop_reason != "tool_use":
             break
@@ -310,7 +311,7 @@ def run_agent(question: str, client, matrix, corpus) -> None:
             else:
                 out = f"Unknown tool: {block.name}"
             first = out.splitlines()[0] if out else ""
-            print(f"  [tool result] {first[:78]}")
+            print(f"  {ui.tool('tool result')} {ui.dim(first[:78])}")
             results.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
@@ -319,7 +320,7 @@ def run_agent(question: str, client, matrix, corpus) -> None:
         messages.append({"role": "user", "content": results})
 
     text = "".join(b.text for b in resp.content if b.type == "text")
-    print("\nAnswer:\n")
+    print("\n" + ui.bold("Answer:") + "\n")
     print(text or "(no text answer)")
     print()
 
@@ -383,14 +384,16 @@ def main() -> None:
         run_agent(args.query, client, matrix, corpus)
         return
 
-    print("Ask about your library (empty line or Ctrl-D to quit).")
+    print("Ask about your library. Commands:  /exit (or Ctrl-D)  quit")
     while True:
         try:
-            q = input("\n> ").strip()
+            q = ui.ask("\n> ").strip()
         except EOFError:
             break
-        if not q:
+        if q in ("/exit", "/quit", "exit", "quit"):
             break
+        if not q:
+            continue
         run_agent(q, client, matrix, corpus)
 
 
