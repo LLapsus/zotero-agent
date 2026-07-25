@@ -137,8 +137,10 @@ python zotero_agent.py -q "Novak's papers about VAEs"
 python zotero_agent.py --scripted             # a portable demo (author/topic/both)
 ```
 
-Indexing and retrieval are **local and free**; only the final answer (and the
-agent's tool loop) calls the paid API (~$0.01 per question).
+In the interactive modes, type `/exit` (or Ctrl-D) to quit; the RAG chat also
+takes `/reset` to start a fresh conversation. Indexing and retrieval are **local
+and free** — only the final answer (and the agent's tool loop) calls the paid
+API (~$0.01 per question).
 
 **Trouble?**
 - *`No index found`* → run `python zotero_rag.py --reindex` first.
@@ -146,6 +148,32 @@ agent's tool loop) calls the paid API (~$0.01 per question).
 - *Ollama connection errors* → is `ollama serve` running, and did you
   `ollama pull nomic-embed-text`?
 - *Auth errors* → is `ANTHROPIC_API_KEY` set in `.env`?
+
+## Example — the agent routing a question
+
+```
+$ python zotero_agent.py
+zotero_agent -- one unified search_library(author?, topic?) tool (COSTS MONEY)
+Ask about your library. Commands:  /exit (or Ctrl-D)  quit
+
+> Which of Medbouhi's papers is about variational autoencoders?
+  [tool call] search_library({"author": "Medbouhi", "topic": "variational autoencoders"})
+  [tool result] Papers by 'Medbouhi' ranked by relevance to 'variational autoenc...
+
+Answer:
+
+Medbouhi has one paper on that topic: "Towards topology-aware Variational
+Auto-Encoders: from InvMap-VAE to Witness Simplicial VAE" [1]. It argues that
+standard VAEs may not preserve the topology of the data between the input and
+the latent space, and proposes topology-aware variants to address it.
+
+> /exit
+```
+
+Notice the model filled **both** `author` and `topic`, so the tool filtered to
+Medbouhi's papers in SQL first and *then* ranked that subset by topic — the
+filter+rank join that plain RAG can't do. (In a real terminal the `[tool call]`
+markers and `[n]` citations are colour-coded.)
 
 ## Learning path
 
