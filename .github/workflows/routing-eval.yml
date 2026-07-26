@@ -1,0 +1,46 @@
+name: routing-eval
+
+# Runs the routing eval when the agent or the eval itself changes on main.
+#
+# This eval calls the PAID Anthropic API (~14 cases x 3 repeats = ~42 requests,
+# a few cents per run). It needs NO Ollama, NO Zotero DB, and NO on-disk index
+# -- it only tests which tool arguments the model fills. So the CI runner needs
+# just the API key (as a repo secret) and a few Python packages.
+#
+# Scoped to relevant paths so docs-only pushes don't spend money, plus a manual
+# "Run workflow" button.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "zotero_agent.py"
+      - "zotero_rag.py"
+      - "eval/**"
+      - ".github/workflows/routing-eval.yml"
+  workflow_dispatch: {}
+
+# If you push again while a run is in flight, cancel the old one (saves API $).
+concurrency:
+  group: routing-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  routing-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        # Only what importing the agent + running the eval needs. NOT the
+        # LangChain/FAISS extras in requirements.txt -- the eval doesn't use them.
+        run: pip install anthropic numpy requests python-dotenv
+
+      - name: Run routing eval
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # The script exits non-zero if any case fails all repeats -> fails the job.
+        run: python eval/run_routing_eval.py --repeat 3
