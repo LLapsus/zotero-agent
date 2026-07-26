@@ -45,6 +45,7 @@ Read them in order — each builds on the one before:
 | `demos/` | Five runnable scripts that walk through each RAG stage on your real library, plus one on conversational memory. |
 | `zotero_agent_v0.py` | First **agent**: two separate tools (topic search + author lookup). Teaches tool *routing* — and shows where two tools fail to compose. |
 | `zotero_agent.py` | The **agent**: one unified `search_library(author?, topic?)` tool — semantic, exact, or a real filter+rank join. |
+| `eval/` | A cheap, deterministic eval of the agent's **routing** decision (does it fill the right tool args?), with per-language results. |
 | `langchain_version/` | The same RAG pipeline written with **LangChain**, plus a measured comparison. |
 
 ## Installation & setup
@@ -174,6 +175,37 @@ Notice the model filled **both** `author` and `topic`, so the tool filtered to
 Medbouhi's papers in SQL first and *then* ranked that subset by topic — the
 filter+rank join that plain RAG can't do. (In a real terminal the `[tool call]`
 markers and `[n]` citations are colour-coded.)
+
+## Routing evaluation
+
+Does the agent fill the *right* tool arguments for a question? `eval/` checks
+exactly that — the cheapest, most deterministic layer of testing. For each
+labelled question it makes one API call, stops at the tool call, and compares
+which of `{author, topic}` Claude filled against the expectation. No retrieval,
+no database, no answer generation — just the routing decision, in isolation.
+
+```bash
+python eval/run_routing_eval.py --repeat 3     # 3 runs per case; flaky == fail
+```
+
+On the bundled cases, routing is solid:
+
+```
+42/42 runs passed (100.0%)
+14/14 cases passed all 3 repeats (100.0%)
+by language:
+  EN:  42/42 runs (100%)   14/14 cases
+```
+
+The cases are **English**, the tested and recommended language. Add your own
+cases — in any language — to `eval/routing_cases.jsonl`, one JSON object per line:
+
+```json
+{"q": "papers by Hopfield", "lang": "EN", "expect": {"author": true, "topic": false}, "author_contains": "Hopfield"}
+```
+
+The `lang` tag drives the per-language breakdown, so if you query in another
+language you can measure how routing holds up before trusting it there.
 
 ## Learning path
 

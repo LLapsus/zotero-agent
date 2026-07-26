@@ -1,0 +1,16 @@
+{"q": "papers about variational autoencoders", "lang": "EN", "expect": {"author": false, "topic": true}}
+{"q": "what do I have on quantum state tomography?", "lang": "EN", "expect": {"author": false, "topic": true}}
+{"q": "anything on diffusion models for galaxies?", "lang": "EN", "expect": {"author": false, "topic": true}}
+{"q": "contrastive learning for phase detection", "lang": "EN", "expect": {"author": false, "topic": true}}
+{"q": "what do I have on skyrmions?", "lang": "EN", "expect": {"author": false, "topic": true}}
+{"q": "papers on the Falicov-Kimball model", "lang": "EN", "expect": {"author": false, "topic": true}}
+# author-only
+{"q": "papers by Hopfield", "lang": "EN", "expect": {"author": true, "topic": false}, "author_contains": "Hopfield"}
+{"q": "list Kosterlitz's papers", "lang": "EN", "expect": {"author": true, "topic": false}, "author_contains": "Kosterlitz"}
+{"q": "what did Duine publish?", "lang": "EN", "expect": {"author": true, "topic": false}, "author_contains": "Duine"}
+{"q": "everything by Sacha", "lang": "EN", "expect": {"author": true, "topic": false}, "author_contains": "Sacha"}
+# author + topic
+{"q": "which of Medbouhi's papers is about variational autoencoders?", "lang": "EN", "expect": {"author": true, "topic": true}, "author_contains": "Medbouhi"}
+{"q": "Sacha's work on time crystals", "lang": "EN", "expect": {"author": true, "topic": true}, "author_contains": "Sacha"}
+{"q": "Han's papers on contrastive learning", "lang": "EN", "expect": {"author": true, "topic": true}, "author_contains": "Han"}
+{"q": "Hopfield's work on associative memory", "lang": "EN", "expect": {"author": true, "topic": true}, "author_contains": "Hopfield"}
