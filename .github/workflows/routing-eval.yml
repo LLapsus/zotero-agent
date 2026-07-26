@@ -43,4 +43,4 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         # The script exits non-zero if any case fails all repeats -> fails the job.
-        run: python eval/run_routing_eval.py --repeat 5
+        run: python eval/run_routing_eval.py --repeat 3

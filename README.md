@@ -1,5 +1,7 @@
 # Zotero Agent
 
+[![routing-eval](https://github.com/LLapsus/zotero-agent/actions/workflows/routing-eval.yml/badge.svg)](https://github.com/LLapsus/zotero-agent/actions/workflows/routing-eval.yml)
+
 Query a personal Zotero library in natural language. The project is built up in
 layers — from a RAG pipeline written with nothing but `numpy` and `requests`, to
 an agent that decides *how* to retrieve for each question — so you can see
@@ -206,6 +208,12 @@ cases — in any language — to `eval/routing_cases.jsonl`, one JSON object per
 
 The `lang` tag drives the per-language breakdown, so if you query in another
 language you can measure how routing holds up before trusting it there.
+
+A GitHub Action ([`.github/workflows/routing-eval.yml`](.github/workflows/routing-eval.yml))
+runs this eval automatically on pushes to `main` that touch the agent or the
+eval — so a change that breaks routing (a reworded system prompt, a tweaked tool
+schema) fails CI instead of shipping silently. The badge
+at the top of this README shows the latest result.
 
 ## Learning path
 
